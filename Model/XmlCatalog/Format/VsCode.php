@@ -3,7 +3,7 @@
  * Copyright © Magento, Inc. All rights reserved.
  * See COPYING.txt for license details.
  */
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Magento\Developer\Model\XmlCatalog\Format;
 
@@ -15,11 +15,14 @@ use Magento\Framework\Filesystem\DriverPool;
 use Magento\Framework\Filesystem\File\WriteFactory;
 
 /**
- * Class PhpStorm generates URN catalog for PhpStorm 9
+ * Class VsCode generates URN catalog for VsCode
  */
-class PhpStorm implements FormatInterface
+class VsCode implements FormatInterface
 {
-    private const PROJECT_PATH_IDENTIFIER = '$PROJECT_DIR$';
+    private const PROJECT_PATH_IDENTIFIER = '..';
+    public const XMLNS = 'urn:oasis:names:tc:entity:xmlns:xml:catalog';
+    public const FILE_MODE_READ = 'r';
+    public const FILE_MODE_WRITE = 'w';
 
     /**
      * @var ReadInterface
@@ -52,24 +55,18 @@ class PhpStorm implements FormatInterface
     }
 
     /**
-     * Generate Catalog of URNs for the PhpStorm 9
+     * Generate Catalog of URNs for the VsCode
      *
      * @param string[] $dictionary
-     * @param string $configFilePath relative path to the PhpStorm misc.xml
-     *
+     * @param string $configFile relative path to the VsCode catalog.xml
      * @return void
      */
-    public function generateCatalog(array $dictionary, $configFilePath)
+    public function generateCatalog(array $dictionary, $configFile): void
     {
-        $componentNode = null;
-        $projectNode = null;
+        $catalogNode = null;
 
         try {
-            $file = $this->fileWriteFactory->create(
-                $configFilePath,
-                DriverPool::FILE,
-                'r'
-            );
+            $file = $this->fileWriteFactory->create($configFile, DriverPool::FILE, self::FILE_MODE_READ);
             $dom = $this->domDocumentFactory->create();
             $fileContent = $file->readAll();
             if (!empty($fileContent)) {
@@ -77,37 +74,37 @@ class PhpStorm implements FormatInterface
             } else {
                 $this->initEmptyFile($dom);
             }
-            $xpath = new \DOMXPath($dom);
-            $nodeList = $xpath->query('/project');
-            $projectNode = $nodeList->item(0);
+            $catalogNode = $dom->getElementsByTagName('catalog')->item(0);
+
+            if ($catalogNode == null) {
+                $dom = $this->domDocumentFactory->create();
+                $catalogNode = $this->initEmptyFile($dom);
+            }
             $file->close();
         } catch (FileSystemException $f) {
             //create file if does not exists
             $dom = $this->domDocumentFactory->create();
-            $projectNode = $this->initEmptyFile($dom);
+            $catalogNode = $this->initEmptyFile($dom);
         }
 
         $xpath = new \DOMXPath($dom);
-        $nodeList = $xpath->query("/project/component[@name='ProjectResources']");
-        $componentNode = $nodeList->item(0);
-        if ($componentNode == null) {
-            $componentNode = $dom->createElement('component');
-            $componentNode->setAttribute('name', 'ProjectResources');
-            $projectNode->appendChild($componentNode);
-        }
+        $xpath->registerNamespace('xmlns', self::XMLNS);
 
         foreach ($dictionary as $urn => $xsdPath) {
-            $node = $dom->createElement('resource');
-            $node->setAttribute('url', $urn);
-            $node->setAttribute('location', $this->getFileLocationInProject($xsdPath));
-            $componentNode->appendChild($node);
+            // Find an existing urn
+            $existingNode = $xpath->query("/xmlns:catalog/xmlns:system[@systemId='" . $urn . "']")->item(0);
+            $node = $existingNode ?? $dom->createElement('system');
+            $node->setAttribute('systemId', $urn);
+            $node->setAttribute('uri', $this->getFileLocationInProject($xsdPath));
+            $catalogNode->appendChild($node);
         }
         $dom->formatOutput = true;
-        $file = $this->fileWriteFactory->create(
-            $configFilePath,
-            DriverPool::FILE,
-            'w'
-        );
+        $dom->preserveWhiteSpace = false;
+
+        // Reload to keep pretty format
+        $dom->loadXML($dom->saveXML());
+
+        $file = $this->fileWriteFactory->create($configFile, DriverPool::FILE, self::FILE_MODE_WRITE);
         $file->write($dom->saveXML());
         $file->close();
     }
@@ -118,20 +115,21 @@ class PhpStorm implements FormatInterface
      * @param \DOMDocument $dom
      * @return \DOMElement
      */
-    private function initEmptyFile(\DOMDocument $dom)
+    private function initEmptyFile(\DOMDocument $dom): \DOMElement
     {
-        $projectNode = $dom->createElement('project');
+        $copyrightComment = $dom->createComment('
+/**
+ * Copyright © Magento, Inc. All rights reserved.
+ * See COPYING.txt for license details.
+ */
+');
+        $dom->appendChild($copyrightComment);
 
-        //PhpStorm 9 version for component is "4"
-        $projectNode->setAttribute('version', '4');
-        $dom->appendChild($projectNode);
-        $rootComponentNode = $dom->createElement('component');
+        $catalogNode = $dom->createElement('catalog');
+        $catalogNode->setAttribute('xmlns', self::XMLNS);
+        $dom->appendChild($catalogNode);
 
-        //PhpStorm 9 version for ProjectRootManager is "2"
-        $rootComponentNode->setAttribute('version', '2');
-        $rootComponentNode->setAttribute('name', 'ProjectRootManager');
-        $projectNode->appendChild($rootComponentNode);
-        return $projectNode;
+        return $catalogNode;
     }
 
     /**
